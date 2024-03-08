@@ -2,59 +2,32 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize)]
-struct JSONContent {
-    #[serde(rename = "type")]
-    typ: Option<String>,
-    attrs: Option<HashMap<String, serde_json::Value>>,
-    content: Option<Vec<JSONContent>>,
-    marks: Option<Vec<Mark>>,
-    text: Option<String>,
-    #[serde(flatten)]
-    other_fields: HashMap<String, serde_json::Value>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Mark {
-    #[serde(rename = "type")]
-    typ: String,
-    attrs: Option<HashMap<String, serde_json::Value>>,
-    #[serde(flatten)]
-    other_fields: HashMap<String, serde_json::Value>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(untagged)]
-enum RichText {
-    String(String),
-    Json(JSONContent),
-    JsonArray(Vec<JSONContent>),
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct RichTextProps {
-    text: RichText,
-}
-
-enum Node {
-    RichTextNode(RenderableNode),
-    Unknown {
-        id: Uuid,
-        props: HashMap<String, serde_json::Value>,
-    },
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Block<T, P> {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Block {
     id: Uuid,
     #[serde(rename = "type")]
-    typ: T,
-    props: P,
+    ty: String,
+    props: HashMap<String, serde_json::Value>,
 }
 
-type RenderableNode<T, P> = Block<T, P>;
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Document {
+    blocks: Vec<Block>,
+}
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Document<T: Into<String>, P: Into<HashMap<String, serde_json::Value>>> {
-    blocks: Vec<Block<T, P>>,
+impl Document {
+    pub fn update_block_props(
+        &mut self,
+        block_id: Uuid,
+        new_props: HashMap<String, serde_json::Value>,
+    ) -> Result<(), String> {
+        // Find the block with the matching ID
+        if let Some(block) = self.blocks.iter_mut().find(|block| block.id == block_id) {
+            // Update the props of the found block
+            block.props = new_props;
+            Ok(())
+        } else {
+            Err("Block not found".to_string())
+        }
+    }
 }

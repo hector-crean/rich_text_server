@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::document::Document;
+
 #[derive(Error, Debug)]
 enum FindError {
     #[error(transparent)]
@@ -27,13 +29,24 @@ enum FindError {
     OsStringNotUtf8,
     #[error(transparent)]
     IoError(#[from] std::io::Error),
+    #[error(transparent)]
+    ReadJsonError(#[from] ReadJsonError),
 }
 
-pub fn read_json<P: AsRef<Path>>(path: P) -> Value {
-    let file = fs::File::open(path).expect("file should open read only");
-    let json: serde_json::Value =
-        serde_json::from_reader(file).expect("file should be proper JSON");
-    json
+#[derive(Error, Debug)]
+pub enum ReadJsonError {
+    #[error("Failed to open the file")]
+    FileOpenError(#[from] std::io::Error),
+    #[error("Failed to parse JSON")]
+    JsonParseError(#[from] serde_json::Error),
+}
+
+pub fn read_json<P: AsRef<Path>, V: for<'de> serde::Deserialize<'de>>(
+    path: P,
+) -> Result<V, ReadJsonError> {
+    let file = fs::File::open(path)?;
+    let json: V = serde_json::from_reader(file)?;
+    Ok(json)
 }
 
 pub struct JsonStrVisitor {
@@ -119,64 +132,36 @@ impl FileSystemEntity {
     }
 }
 
-pub enum TargetFile<'target> {
-    RelativePath(&'target str),
-    AbsolutePath(&'target str),
-}
+pub struct JsonFileSearcher;
 
-impl<'target> TargetFile<'target> {}
-
-pub struct FileSearcher<'dest, Q: AsRef<Path>> {
-    dest_folder_path: &'dest Q,
-}
-
-impl<'target, 'dest: 'target, Q: AsRef<Path>> FileSearcher<'target, Q> {
-    pub fn new(dest_folder_path: &'dest Q) -> Self {
-        Self { dest_folder_path }
+impl<'target> JsonFileSearcher {
+    pub fn new() -> Self {
+        Self {}
     }
-    pub fn search_and_copy<R: AsRef<Path>>(
+    pub fn search_and_replace_props<R: AsRef<Path>>(
         &self,
-        target_file: &TargetFile<'target>,
         search_directory: R,
-    ) -> std::io::Result<()> {
-        match target_file {
-            TargetFile::RelativePath(relative_path) => {
-                for entry in fs::read_dir(search_directory)? {
-                    let entry = entry?;
-                    let path = entry.path();
-                    tracing::info!("searching: {:?}", path.display());
+        uuid: &Uuid,
+        props: &HashMap<String, serde_json::Value>,
+    ) -> Result<(), ReadJsonError> {
+        for entry in fs::read_dir(search_directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            tracing::info!("searching: {:?}", path.display());
 
-                    match FileSystemEntity::classify(&path)? {
-                        FileSystemEntity::File => {
-                            let canon_path = path.canonicalize()?;
+            match FileSystemEntity::classify(&path)? {
+                FileSystemEntity::File => {
+                    let mut doc: Document = read_json(&path)?;
+                    let _ = doc.update_block_props(uuid.clone(), props.clone());
 
-                            if canon_path.ends_with(relative_path) {
-                                let slug = Slug::new(relative_path);
-                                let dest_path = self.dest_folder_path.as_ref().join(&*slug);
+                    let buf = serde_json::to_string(&doc)?;
 
-                                // Perform the copying or other operations here.
-                                match fs::copy(path, dest_path) {
-                                    Ok(_) => {
-                                        tracing::info!("✔️, {:?}", canon_path);
-                                    }
-                                    Err(err) => {
-                                        tracing::info!("❌, {:?}", canon_path);
-                                    }
-                                }
-                            } else {
-                            }
-                        }
-                        FileSystemEntity::Folder => self.search_and_copy(target_file, path)?,
-                    }
+                    fs::write(&path, buf);
                 }
-            }
-            TargetFile::AbsolutePath(absolute_path) => {
-                let slug = Slug::new(&absolute_path);
-
-                let dest_path = self.dest_folder_path.as_ref().join(&*slug);
-                fs::copy(absolute_path, dest_path)?;
+                FileSystemEntity::Folder => self.search_and_replace_props(path, uuid, props)?,
             }
         }
+
         Ok(())
     }
 }
